@@ -1,4 +1,4 @@
-import { lookupMerchant } from './merchants.js';
+import { lookupMerchant, lookupPosting } from './merchants.js';
 import type { MerchantRule } from './merchants.js';
 import type { NarrationKind, ParsedNarration } from './types.js';
 
@@ -18,6 +18,16 @@ const UTR_TOKEN = /^\d{12}$/;
 
 /** IFSC, e.g. `HDFC0001234`. Routing detail, never a payee. */
 const IFSC_TOKEN = /^[A-Z]{4}0[A-Z0-9]{6}$/i;
+
+/**
+ * A NACH/ACH mandate reference: a four-letter bank code followed by a long
+ * digit run, e.g. `ICIC0000000000000001`.
+ *
+ * Stable for the life of the mandate, unlike the per-collection sequence
+ * number printed beside it, which makes it the only usable payee identity for
+ * recurring debits such as loan EMIs and mutual-fund SIPs.
+ */
+const MANDATE_TOKEN = /^[a-z]{4}\d{8,}$/i;
 
 /** Masked card/account numbers, e.g. `1234XXXX5678`, `XXXXXXXX1234`. */
 const MASKED_TOKEN = /^[\dX*]+$/i;
@@ -48,6 +58,18 @@ const NOISE_TOKENS = new Set([
   'atw',
   'nwd',
   'atm',
+  // ICICI's code for a card autopay debit, e.g. `ATD/Auto Debit CC0xx0000`.
+  'atd',
+  // Federal's channel codes: `UPIOUT/...`, `MB FTO/...`, `FT IMPS/IFI/...`.
+  'upiout',
+  'upiin',
+  'fto',
+  'fti',
+  'ft',
+  'ifi',
+  'impstxn',
+  'nre',
+  'nro',
   'mmt',
   'ecs',
   'nach',
@@ -138,6 +160,39 @@ const BANK_CODES = new Set([
 ]);
 
 /**
+ * Noise that a fixed word list cannot cover, because banks truncate fields to
+ * a fixed width and spell bank names out in full.
+ *
+ * ICICI cuts every narration field to about ten characters, so `Payment from`
+ * arrives as `Payment fr` and `Pay request` as `Pay reques` — prefixes, not
+ * whole words. It also names the counterparty's bank in words (`State Bank`,
+ * `FEDERAL BA`, `IDFC FIRST`, `HDFC BANK LTD`), and those would otherwise
+ * compete with the actual payee for the longest-name-wins rule.
+ */
+const NOISE_PATTERNS: RegExp[] = [
+  // Truncated descriptors.
+  /^payment/,
+  /^payreq/,
+  /^paymentfr/,
+  /^debittrxn$/,
+  /^credittrxn$/,
+  /^autodebit/,
+  /^(debit|credit|trxn|txnno)$/,
+  /^collectfr/,
+  /^fundtransf/,
+  // Bank names, including ICICI's truncated forms. Anchored deliberately: a
+  // bare /^hdfc/ would also reject `HDFC MUTUAL FUND SIP`, which is a real
+  // payee. Only a token that is *entirely* a bank name counts as noise.
+  /^[a-z]{3,}bank(ltd|limited)?$/,
+  /^federalba(nk)?$/,
+  /^idfcfirst$/,
+  /^axisbank$/,
+  /^yesbank(ltd)?$/,
+  /^unionofindia$/,
+  /^punjabnational$/,
+];
+
+/**
  * Words to leave in upper case when building a display name. Bank codes are
  * included because they legitimately appear in payee names for mutual funds
  * and standing instructions (`HDFC MUTUAL FUND SIP`).
@@ -157,7 +212,8 @@ const KNOWN_ACRONYMS = new Set([
 ]);
 
 const KIND_MARKERS: Array<[RegExp, NarrationKind]> = [
-  [/^upi$/i, 'upi'],
+  // `UPIOUT`/`UPIIN` are Federal's directional forms of the UPI marker.
+  [/^upi(out|in)?$/i, 'upi'],
   [/^neft$/i, 'neft'],
   [/^(imps|mmt|inft)$/i, 'imps'],
   [/^rtgs$/i, 'rtgs'],
@@ -207,9 +263,10 @@ function subTokens(tokens: string[]): string[] {
 }
 
 function detectKind(tokens: string[]): NarrationKind {
-  // Scan the first two tokens: some banks prefix the route with a channel
-  // marker, e.g. `MMT/IMPS/...`.
-  for (const token of tokens.slice(0, 2)) {
+  // Scan the words of the first two tokens: banks prefix the route with a
+  // channel marker, sometimes in the same field — `MMT/IMPS/...` but also
+  // Federal's `FT IMPS/IFI/...`, where the marker is the second word.
+  for (const token of subTokens(tokens.slice(0, 2))) {
     for (const [marker, kind] of KIND_MARKERS) {
       if (marker.test(token)) {
         return kind;
@@ -243,20 +300,42 @@ function letterCount(value: string): number {
 }
 
 /** Could this token name a payee? */
+/**
+ * Is this an opaque machine reference rather than a name?
+ *
+ * ICICI appends a long provider reference after the UTR, e.g.
+ * `SBI1aa2bb3cc4dd5ee6ff7aa8bb9cc0dd1ee` or `ICIC0000000000000001`. These carry
+ * ~20 letters, so a "longest run of letters wins" rule would happily pick one
+ * as the payee. Mixing letters and digits over this length is not something a
+ * merchant name does.
+ */
+function isOpaqueReference(bare: string): boolean {
+  // Eight characters rather than twelve: PDF extraction can break a long
+  // reference across lines, leaving a short tail such as `b9cc0dd2ee` that
+  // would otherwise qualify as a name. Requiring both letters and digits keeps
+  // real names safe, since names do not contain digits.
+  return bare.length >= 8 && /\d/.test(bare) && /[a-z]/.test(bare);
+}
+
 function isMerchantCandidate(token: string): boolean {
   const bare = token.toLowerCase().replace(/[^a-z0-9]/g, '');
 
   if (!bare || NOISE_TOKENS.has(bare) || BANK_CODES.has(bare)) {
     return false;
   }
+  if (NOISE_PATTERNS.some(pattern => pattern.test(bare))) {
+    return false;
+  }
   if (VPA_TOKEN.test(token) || IFSC_TOKEN.test(token)) {
     return false;
   }
-  if (MASKED_TOKEN.test(token)) {
+  if (MASKED_TOKEN.test(token) || isOpaqueReference(bare)) {
     return false;
   }
-  // Needs real letters — rules out `2024`, `#`, `...`.
-  return letterCount(token) >= 2;
+  // Needs a real word. Three letters rather than two, because date ranges in
+  // interest postings leave fragments like `2025to 30`, whose only letters are
+  // the `to`, and that would otherwise be chosen as the payee.
+  return letterCount(token) >= 3;
 }
 
 /**
@@ -369,7 +448,8 @@ export function parseNarration(
 
   // Parenthesised deliberately: `a ?? b || c` is a syntax error in JS.
   const merchant =
-    resolveMerchant({ vpa, candidate, rules, kind }) ?? (trimmed || 'Unknown');
+    resolveMerchant({ vpa, candidate, rules, kind, raw: trimmed, tokens }) ??
+    (trimmed || 'Unknown');
 
   return {
     kind,
@@ -385,11 +465,15 @@ function resolveMerchant({
   candidate,
   rules,
   kind,
+  raw,
+  tokens,
 }: {
   vpa: string | undefined;
   candidate: string | null;
   rules: MerchantRule[];
   kind: NarrationKind;
+  raw: string;
+  tokens: string[];
 }): string | null {
   // A mapped merchant is the strongest signal, and the VPA is the most stable
   // thing to map on — it survives spelling changes in the name field.
@@ -405,6 +489,15 @@ function resolveMerchant({
     if (mapped) {
       return mapped;
     }
+  }
+
+  // Bank postings that are not payments to anyone — interest, tax, charges.
+  // Checked ahead of the weaker name heuristics below, because a charge like
+  // `MABChgs-Mar2026` does contain a word-ish token (`MABChgs`) that would
+  // otherwise be title-cased into a payee.
+  const posting = lookupPosting(raw);
+  if (posting) {
+    return posting;
   }
 
   // A cash withdrawal has no payee. Without this the leftover token is
@@ -428,7 +521,28 @@ function resolveMerchant({
     if (fromVpa) {
       return fromVpa;
     }
+    // Nothing readable in it — a phone number or an account number as the
+    // local part. The VPA itself is still the right answer: it is stable per
+    // counterparty, whereas the raw narration carries a per-transaction
+    // reference and so would mint a new payee every time.
+    return vpa.toLowerCase();
   }
 
-  return candidate ? titleCase(candidate) : null;
+  if (candidate) {
+    return titleCase(candidate);
+  }
+
+  // A recurring mandate has no name in its narration, only the collecting
+  // bank and the mandate reference. Naming it after the mandate keeps every
+  // collection under one payee — otherwise the sequence number printed beside
+  // it makes each month a brand new payee, which is the exact problem this
+  // tool exists to solve. Give it a meaningful name with a merchant rule.
+  if (kind === 'ach') {
+    const mandate = subTokens(tokens).find(token => MANDATE_TOKEN.test(token));
+    if (mandate) {
+      return `NACH ${mandate.toUpperCase()}`;
+    }
+  }
+
+  return null;
 }

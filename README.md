@@ -3,7 +3,9 @@
 Convert Indian bank statements into [Actual Budget](https://actualbudget.org)
 transactions, with **real merchant names instead of UPI reference strings**.
 
-> **Status: early.** CSV, Excel and HTML-disguised `.xls` input work. PDF is not implemented yet.
+> **Status: early.** CSV, Excel, HTML-disguised `.xls` and PDF input all work.
+> Verified end to end against real ICICI and Federal Bank statements, with
+> every amount cross-checked against the statement's own balance column.
 > See [Roadmap](#roadmap).
 
 ## The problem this solves
@@ -70,8 +72,15 @@ The format is detected by **inspecting the file**
 | Excel `.xlsx` (OOXML)               | yes                               |
 | HTML table named `.xls`             | yes                               |
 | Excel 2003 XML (SpreadsheetML)      | yes                               |
+| PDF (including password-protected)  | yes                               |
 | Legacy binary `.xls` (OLE2)         | no — re-save as `.xlsx` or `.csv` |
-| PDF                                 | not yet                           |
+
+**Note for ICICI:** the `.xls` the app gives you is legacy binary Excel, which
+is the one format not supported. Use the PDF instead — it works directly.
+
+**Note for Federal Bank:** statements are PDF-only from the app and are
+password-protected. Pass the password through `STATEMENT_PASSWORD` (see
+below).
 
 ```
 Read statement.xls as HTML table (a .xls file that is really HTML)
@@ -154,6 +163,51 @@ the exact ways statement parsing goes wrong. It matters most for PDFs, where
 extraction is inherently less certain. Statements are also checked in both date
 orders, so newest-first exports are handled.
 
+## PDF statements
+
+PDF tables are reconstructed from the position of each piece of text, which is
+harder than it sounds and is why the balance check matters most here. Handled:
+
+- **Headers split across several lines.** ICICI prints `Transaction Date` as
+  `Transaction` on one baseline and `Date` on the next, and
+  `Withdrawal Amount (INR)` across three.
+- **Column detection from whitespace.** Columns are found by accumulating the
+  horizontal extent of all table text and splitting on the gutters that stay
+  empty on every row. Two simpler approaches were tried first and both failed
+  on real files: comparing where text starts splits a right-aligned amount
+  from its own header (which can begin 36 points to its left), and merging
+  overlapping spans bridges columns whenever a header label is wider than the
+  column spacing (Federal packs columns 45 points apart with labels nearly
+  that wide, collapsing `Withdrawals` and `Deposits` into one cell).
+- **Narrations wrapped over several lines**, reassembled in reading order.
+- **Descriptor lines.** ICICI prints a label above each row (`NACH trxn`,
+  `Debit trxn`) that is not part of the bank's narration — the source
+  spreadsheet contains no occurrence of "trxn" — so it is dropped.
+- **Page headers and footers**, which otherwise fold into the nearest
+  transaction. One toll-free number landed inside an amount before this was
+  fixed; the balance check caught it.
+- **Summary rows.** `GRAND TOTAL` and `Opening Balance` carry no date, so they
+  would attach to the nearest transaction — a grand total's column sums
+  landing in an amount field.
+- **Dates in the preamble.** Federal prints `Account Open Date : 25/03/2013`
+  above the table, so transactions are only read from below the header row.
+
+For an encrypted PDF, supply the password through the environment so it stays
+out of your shell history:
+
+```bash
+STATEMENT_PASSWORD='...' npx tsx src/cli.ts statement.pdf
+```
+
+### Known limitation
+
+Whether a line break was a word wrap or a deliberate break cannot always be
+decided from a PDF, so a space is occasionally introduced inside a long
+reference, or lost between two words (`FEDERAL BA` becoming `FEDERALBA`). This
+is cosmetic: dates, amounts, payees and the deduplication reference are all
+derived from fields that do not depend on it, and amounts are independently
+checked against the balance column.
+
 ## Custom merchant rules
 
 The built-in map covers common Indian merchants. Add your own in JSON:
@@ -172,6 +226,20 @@ npx tsx src/cli.ts statement.csv --merchants my-merchants.json
 Patterns are matched against a lowercased, punctuation-stripped form of the VPA
 local-part or merchant name, so write them without spaces or dots. Your rules
 take precedence over the built-ins.
+
+**Naming recurring mandates.** A NACH narration contains no name — only the
+collecting bank and a mandate reference, followed by a sequence number that
+changes every month. Those collections are grouped under the stable mandate
+reference, e.g. `NACH ICIC0000000000000001`, so give each one a real name once:
+
+```json
+[{ "pattern": "icic0000000000000001", "name": "Home Loan EMI" }]
+```
+
+**Indian bank quirk worth knowing.** ICICI truncates each narration field to
+about ten characters, so the same counterparty can arrive as `Mr A N OTHE`,
+`A N OTHER` or `OTHER` depending on the payment route. A rule per variant
+collapses them.
 
 ## Duplicate handling
 
@@ -205,8 +273,7 @@ gives you a spreadsheet, use it.
 - [x] Excel `.xlsx`, HTML tables named `.xls`, and Excel 2003 XML
 - [ ] Legacy binary `.xls` (OLE2) — currently refused with instructions to
       re-save; no maintained permissive Node reader exists for it
-- [ ] PDF input, including password-protected statements (Federal and others
-      are PDF-only via mobile)
+- [x] PDF input, including password-protected statements
 - [x] Direct push via `@actual-app/api`, with `--dry-run`
 
 ## Limitations, honestly

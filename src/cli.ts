@@ -181,22 +181,17 @@ async function run(args: string[]): Promise<number> {
     );
   }
 
-  if (extname(options.input).toLowerCase() === '.pdf') {
-    throw new Error(
-      'PDF support is not implemented yet. If your bank offers XLS or CSV ' +
-        'through internet banking, prefer that — it is far more reliable than ' +
-        'extracting tables from a PDF.',
-    );
-  }
-
   // Resolved before any parsing work so a missing credential or account fails
   // immediately rather than after processing the whole statement.
   const pushConfig = options.push ? pushConfigFromEnv(options) : null;
 
-  const { table, format } = await extractTable(
-    options.input,
-    options.delimiter ? { delimiter: options.delimiter } : {},
-  );
+  // Read from the environment, not a flag, so it stays out of shell history.
+  const pdfPassword = env.STATEMENT_PASSWORD;
+
+  const { table, format } = await extractTable(options.input, {
+    ...(options.delimiter ? { delimiter: options.delimiter } : {}),
+    ...(pdfPassword ? { password: pdfPassword } : {}),
+  });
   log(`Read ${options.input} as ${describeFormat(format)}`);
 
   const result = interpretTable(table, {

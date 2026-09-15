@@ -12,6 +12,7 @@ export type DetectedFormat =
   | 'html' // HTML `<table>` wearing an .xls extension.
   | 'spreadsheetml' // Excel 2003 XML.
   | 'biff' // Legacy binary .xls (OLE2 compound document).
+  | 'pdf'
   | 'text'; // CSV/TSV or anything else line-oriented.
 
 /** OOXML/ZIP: `PK\x03\x04`. */
@@ -19,6 +20,9 @@ const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
 
 /** OLE2 compound document, used by legacy .xls and .doc. */
 const OLE2_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+
+/** `%PDF-`. */
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d];
 
 function startsWithBytes(buffer: Buffer, magic: number[]): boolean {
   if (buffer.length < magic.length) {
@@ -33,6 +37,9 @@ export function detectFormat(buffer: Buffer): DetectedFormat {
   }
   if (startsWithBytes(buffer, OLE2_MAGIC)) {
     return 'biff';
+  }
+  if (startsWithBytes(buffer, PDF_MAGIC)) {
+    return 'pdf';
   }
 
   // Only the head matters, and only as text. A binary file decoded this way
@@ -69,6 +76,8 @@ export function describeFormat(format: DetectedFormat): string {
       return 'Excel 2003 XML (SpreadsheetML)';
     case 'biff':
       return 'legacy binary Excel (.xls, OLE2)';
+    case 'pdf':
+      return 'PDF';
     case 'text':
       return 'delimited text';
     default:

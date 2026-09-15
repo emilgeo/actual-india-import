@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 
 import { extractCsv } from './csv.js';
 import { extractHtmlTable } from './html-table.js';
-import { detectFormat, describeFormat } from './sniff.js';
+import { extractPdf } from './pdf.js';
+import { describeFormat, detectFormat } from './sniff.js';
 import type { DetectedFormat } from './sniff.js';
 import { extractSpreadsheetMl } from './spreadsheetml.js';
 import type { Table } from './types.js';
@@ -11,6 +12,8 @@ import { extractXlsx } from './xlsx.js';
 export type ExtractOptions = {
   /** Only used for delimited text. */
   delimiter?: string;
+  /** Only used for encrypted PDFs. */
+  password?: string;
 };
 
 export type Extraction = {
@@ -37,6 +40,14 @@ export async function extractTable(
       return { table: await extractHtmlTable(path), format };
     case 'spreadsheetml':
       return { table: await extractSpreadsheetMl(path), format };
+    case 'pdf':
+      return {
+        table: await extractPdf(
+          path,
+          options.password ? { password: options.password } : {},
+        ),
+        format,
+      };
     case 'biff':
       // Legacy BIFF has no maintained, permissively licensed reader for Node,
       // and re-saving is a one-step fix, so this stays an explicit refusal

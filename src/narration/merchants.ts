@@ -106,6 +106,46 @@ export const MERCHANT_RULES: MerchantRule[] = [
 ];
 
 /**
+ * Bank postings that are not payments to anyone: interest, tax, card autopay.
+ *
+ * These are matched against the *whole* narration rather than an extracted
+ * name token, because there is no name in them to extract — ICICI writes
+ * interest as `000123456789:Int.Pd:30-09-2025 to 30-12-2025`. Without this the
+ * payee would be the entire narration, which differs every quarter and so
+ * creates a new payee each time.
+ *
+ * Kept separate from `MERCHANT_RULES` so that merchant patterns, which are
+ * anchored to the start of a name, are never accidentally matched against the
+ * middle of a narration.
+ */
+export const POSTING_RULES: MerchantRule[] = [
+  { pattern: /wtaxpd/, name: 'Withholding Tax' },
+  { pattern: /intpd/, name: 'Interest Paid' },
+  // Minimum average balance charge, billed monthly as `MABChgs-Mar2026`.
+  { pattern: /mabchgs/, name: 'Minimum Balance Charge' },
+  { pattern: /autodebitcc/, name: 'Credit Card Autopay' },
+  // Debit card annual fee, e.g. `DCARDFEE0000AUG26-JUL27+GST`.
+  { pattern: /dcardfee/, name: 'Debit Card Fee' },
+  { pattern: /(atmwdl|cashwdl|nwdcash)/, name: 'ATM Withdrawal' },
+];
+
+/** Resolve a bank posting type from a full narration, or null. */
+export function lookupPosting(raw: string): string | null {
+  const normalized = normalizeForLookup(raw);
+  if (!normalized) {
+    return null;
+  }
+
+  for (const rule of POSTING_RULES) {
+    if (rule.pattern.test(normalized)) {
+      return rule.name;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Collapse a VPA local-part or name token into the form the patterns expect:
  * lowercase, separators and spaces removed. `Bharat-Pe 123` -> `bharatpe123`.
  */
