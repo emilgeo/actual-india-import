@@ -28,6 +28,14 @@
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },
+  "peerDependencies": {
+    "@actual-app/api": ">=25.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@actual-app/api": {
+      "optional": true
+    }
+  },
   "engines": {
     "node": ">=22"
   }

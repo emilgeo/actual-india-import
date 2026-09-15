@@ -73,7 +73,6 @@ The format is detected by **inspecting the file**
 | Legacy binary `.xls` (OLE2)         | no — re-save as `.xlsx` or `.csv` |
 | PDF                                 | not yet                           |
 
-
 ```
 Read statement.xls as HTML table (a .xls file that is really HTML)
 Header on row 3; columns: date=0, description=1, debit=2, credit=3, balance=4
@@ -94,6 +93,47 @@ Actual remembers that mapping per account, so you only do it once.
 | `--merchants <path>`         | Your own merchant rules (see below).                                                      |
 | `--force`                    | Write even if the balance check fails.                                                    |
 | `--quiet`                    | Only report problems.                                                                     |
+
+## Pushing straight into Actual
+
+Instead of writing a CSV, the tool can send transactions to Actual directly.
+This needs the API package:
+
+```bash
+npm install @actual-app/api
+```
+
+Credentials come from the environment, never from flags — a flag ends up in
+your shell history and in process listings:
+
+```bash
+export ACTUAL_SERVER_URL=https://actual.example.com
+export ACTUAL_PASSWORD='...'
+export ACTUAL_SYNC_ID='...'                # Settings > Advanced > Sync ID
+# export ACTUAL_ENCRYPTION_PASSWORD='...'  # only for encrypted budgets
+
+# Always preview first:
+npx tsx src/cli.ts statement.xls --push --account "ICICI Savings" --dry-run
+# [dry run] ICICI Savings: would add 34, would update 0.
+
+npx tsx src/cli.ts statement.xls --push --account "ICICI Savings"
+```
+
+`--dry-run` maps onto Actual's own preview mode, so nothing is written.
+
+The API path is better than the CSV path in two ways:
+
+- **`imported_payee` is set properly.** The cleaned merchant goes to
+  `payee_name` and the original narration to `imported_payee`, which is exactly
+  what those fields are for. The CSV path must put the narration in Notes
+  instead, because Actual's CSV field mapping has no `imported_payee` slot.
+- **`imported_id` enables real deduplication**, so re-importing an overlapping
+  date range does not create duplicates.
+
+It also passes `payeeNameNormalization: 'original'`. Actual title-cases
+imported payees by default, and that lowercases first — which would turn
+`DMart` into `Dmart` and `HDFC Mutual Fund SIP` into `Hdfc Mutual Fund Sip`,
+undoing the naming work.
 
 ## The balance check
 
@@ -136,7 +176,7 @@ take precedence over the built-ins.
 ## Duplicate handling
 
 When a narration contains a 12-digit UPI reference (UTR/RRN), it is emitted in
-the `Reference` column. Via the future API path this becomes Actual's
+the `Reference` column. With `--push` this becomes Actual’s
 `imported_id`, making re-imports of overlapping date ranges genuinely
 idempotent.
 
@@ -167,7 +207,7 @@ gives you a spreadsheet, use it.
       re-save; no maintained permissive Node reader exists for it
 - [ ] PDF input, including password-protected statements (Federal and others
       are PDF-only via mobile)
-- [ ] Direct push via `@actual-app/api`, with `--dry-run`
+- [x] Direct push via `@actual-app/api`, with `--dry-run`
 
 ## Limitations, honestly
 
@@ -179,7 +219,7 @@ gives you a spreadsheet, use it.
   PhonePe, Razorpay) often mask the real merchant; the tool gives you a
   consistent payee, which is better than one per transaction, but not always
   the actual shop.
-- **Notes carry the raw narration on the CSV path.** Actual's CSV field mapping
+- **Notes carry the raw narration on the CSV path.** Actual’s CSV field mapping
   has no `imported_payee` slot, so the original goes into Notes. The API path
   will set `imported_payee` properly.
 - **No automatic fetching, and there cannot be.** India's Account Aggregator

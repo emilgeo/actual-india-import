@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { basename, dirname, extname, join } from 'node:path';
-import { argv, exit, stderr, stdout } from 'node:process';
+import { argv, cwd, env, exit, stderr, stdout } from 'node:process';
 
 import { describeFormat, extractTable } from './extract/index.js';
 import { interpretTable } from './interpret/rows.js';
@@ -9,6 +9,8 @@ import type { DateOrder } from './interpret/values.js';
 import { loadMerchantRules } from './merchants-file.js';
 import type { MerchantRule } from './narration/merchants.js';
 import { toCsv, writeCsv } from './out/csv.js';
+import { pushTransactions } from './out/push.js';
+import type { PushConfig } from './out/push.js';
 
 const USAGE = `
 actual-india-import — convert Indian bank statements for Actual Budget
@@ -29,6 +31,21 @@ Options:
   --quiet               Only report problems.
   --help                Show this message.
 
+Pushing straight into Actual (instead of writing a CSV):
+  --push                Send the transactions to Actual via its API.
+  --account <name|id>   Which Actual account to import into. Required for --push.
+  --dry-run             With --push, report what would change without writing.
+
+  Credentials come from the environment, never from flags (a flag would end up
+  in your shell history):
+    ACTUAL_SERVER_URL           e.g. https://actual.example.com
+    ACTUAL_PASSWORD             your server password
+    ACTUAL_SYNC_ID              the budget's sync id (Settings > Advanced)
+    ACTUAL_ENCRYPTION_PASSWORD  only if the budget file is encrypted
+    ACTUAL_DATA_DIR             local cache dir (default: ./.actual-cache)
+
+  --push needs the API package: npm install @actual-app/api
+
 Input is detected by content, not by extension, because banks routinely name
 HTML tables ".xls". Supported: CSV/TSV, Excel .xlsx, HTML tables, and Excel
 2003 XML. Legacy binary .xls must be re-saved as .xlsx or .csv first. PDF is
@@ -44,6 +61,9 @@ type Options = {
   merchants?: string;
   force: boolean;
   quiet: boolean;
+  push: boolean;
+  account?: string;
+  dryRun: boolean;
 };
 
 function parseArgs(args: string[]): Options | null {
@@ -57,6 +77,8 @@ function parseArgs(args: string[]): Options | null {
     dateOrder: 'dmy',
     force: false,
     quiet: false,
+    push: false,
+    dryRun: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -91,6 +113,15 @@ function parseArgs(args: string[]): Options | null {
       case '--merchants':
         options.merchants = next();
         break;
+      case '--push':
+        options.push = true;
+        break;
+      case '--account':
+        options.account = next();
+        break;
+      case '--dry-run':
+        options.dryRun = true;
+        break;
       case '--force':
         options.force = true;
         break;
@@ -110,6 +141,14 @@ function parseArgs(args: string[]): Options | null {
 
   if (!options.input) {
     throw new Error('No input file given');
+  }
+
+  if (options.push && !options.account) {
+    throw new Error('--push also needs --account <name|id>');
+  }
+
+  if (options.dryRun && !options.push) {
+    throw new Error('--dry-run only applies to --push');
   }
 
   return options;
@@ -149,6 +188,10 @@ async function run(args: string[]): Promise<number> {
         'extracting tables from a PDF.',
     );
   }
+
+  // Resolved before any parsing work so a missing credential or account fails
+  // immediately rather than after processing the whole statement.
+  const pushConfig = options.push ? pushConfigFromEnv(options) : null;
 
   const { table, format } = await extractTable(
     options.input,
@@ -220,6 +263,23 @@ async function run(args: string[]): Promise<number> {
     log(`Balance check skipped: ${validation.issues[0] ?? 'no balance data'}`);
   }
 
+  if (pushConfig) {
+    const result = await pushTransactions(transactions, pushConfig);
+
+    const verb = result.dryRun ? 'would add' : 'added';
+    const alsoVerb = result.dryRun ? 'would update' : 'updated';
+    stderr.write(
+      `${result.dryRun ? '[dry run] ' : ''}${result.accountName}: ` +
+        `${verb} ${result.added}, ${alsoVerb} ${result.updated}.\n`,
+    );
+
+    for (const error of result.errors) {
+      stderr.write(`  error: ${error}\n`);
+    }
+
+    return result.errors.length ? 1 : 0;
+  }
+
   if (options.useStdout) {
     stdout.write(toCsv(transactions));
     return 0;
@@ -230,6 +290,40 @@ async function run(args: string[]): Promise<number> {
   log(`Wrote ${outPath}`);
 
   return 0;
+}
+
+/**
+ * Build the push configuration from the environment.
+ *
+ * Credentials are read from the environment rather than accepted as flags so
+ * they do not end up in shell history or process listings.
+ */
+function pushConfigFromEnv(options: Options): PushConfig {
+  if (!options.account) {
+    throw new Error('--push also needs --account <name|id>');
+  }
+
+  const missing = (
+    ['ACTUAL_SERVER_URL', 'ACTUAL_PASSWORD', 'ACTUAL_SYNC_ID'] as const
+  ).filter(name => !env[name]);
+  if (missing.length) {
+    throw new Error(
+      `--push needs these environment variables: ${missing.join(', ')}\n` +
+        'See --help for the full list.',
+    );
+  }
+
+  const encryptionPassword = env.ACTUAL_ENCRYPTION_PASSWORD;
+
+  return {
+    serverURL: env.ACTUAL_SERVER_URL as string,
+    password: env.ACTUAL_PASSWORD as string,
+    syncId: env.ACTUAL_SYNC_ID as string,
+    dataDir: env.ACTUAL_DATA_DIR ?? join(cwd(), '.actual-cache'),
+    account: options.account,
+    dryRun: options.dryRun,
+    ...(encryptionPassword ? { encryptionPassword } : {}),
+  };
 }
 
 run(argv.slice(2))

@@ -3,10 +3,11 @@ dist/
 *.tsbuildinfo
 
 # Never commit real statements or anything derived from them.
-statements/
+/statements/
 *.pdf
 *.xls
 *.xlsx
-out/
+/out/
+.actual-cache/
 .env
 .merchants.local.json
