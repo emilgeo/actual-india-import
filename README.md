@@ -3,7 +3,7 @@
 Convert Indian bank statements into [Actual Budget](https://actualbudget.org)
 transactions, with **real merchant names instead of UPI reference strings**.
 
-> **Status: early.** CSV input works. XLS/XLSX and PDF are not implemented yet.
+> **Status: early.** CSV, Excel and HTML-disguised `.xls` input work. PDF is not implemented yet.
 > See [Roadmap](#roadmap).
 
 ## The problem this solves
@@ -57,7 +57,26 @@ npm install
 npx tsx src/cli.ts statement.csv
 # writes statement.actual.csv next to the input
 
-npx tsx src/cli.ts statement.csv --stdout   # preview without writing
+npx tsx src/cli.ts statement.xls --stdout   # preview without writing
+```
+
+### Supported input
+
+The format is detected by **inspecting the file**
+
+| Actually is                         | Supported                         |
+| ----------------------------------- | --------------------------------- |
+| CSV / TSV (delimiter auto-detected) | yes                               |
+| Excel `.xlsx` (OOXML)               | yes                               |
+| HTML table named `.xls`             | yes                               |
+| Excel 2003 XML (SpreadsheetML)      | yes                               |
+| Legacy binary `.xls` (OLE2)         | no — re-save as `.xlsx` or `.csv` |
+| PDF                                 | not yet                           |
+
+
+```
+Read statement.xls as HTML table (a .xls file that is really HTML)
+Header on row 3; columns: date=0, description=1, debit=2, credit=3, balance=4
 ```
 
 Then import the generated CSV through Actual's normal
@@ -143,7 +162,9 @@ gives you a spreadsheet, use it.
 
 - [x] CSV/TSV input, generic column detection, balance validation
 - [x] UPI/NEFT/IMPS/POS/ACH/ATM narration parsing
-- [ ] XLS/XLSX input (ICICI and others ship `.xls` by default)
+- [x] Excel `.xlsx`, HTML tables named `.xls`, and Excel 2003 XML
+- [ ] Legacy binary `.xls` (OLE2) — currently refused with instructions to
+      re-save; no maintained permissive Node reader exists for it
 - [ ] PDF input, including password-protected statements (Federal and others
       are PDF-only via mobile)
 - [ ] Direct push via `@actual-app/api`, with `--dry-run`

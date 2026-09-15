@@ -2,8 +2,7 @@
 import { basename, dirname, extname, join } from 'node:path';
 import { argv, exit, stderr, stdout } from 'node:process';
 
-import { extractCsv } from './extract/csv.js';
-import type { Table } from './extract/types.js';
+import { describeFormat, extractTable } from './extract/index.js';
 import { interpretTable } from './interpret/rows.js';
 import { validateBalances } from './interpret/validate.js';
 import type { DateOrder } from './interpret/values.js';
@@ -30,7 +29,10 @@ Options:
   --quiet               Only report problems.
   --help                Show this message.
 
-Currently supported input: CSV/TSV. XLS/XLSX and PDF are not implemented yet.
+Input is detected by content, not by extension, because banks routinely name
+HTML tables ".xls". Supported: CSV/TSV, Excel .xlsx, HTML tables, and Excel
+2003 XML. Legacy binary .xls must be re-saved as .xlsx or .csv first. PDF is
+not implemented yet.
 `.trim();
 
 type Options = {
@@ -113,31 +115,6 @@ function parseArgs(args: string[]): Options | null {
   return options;
 }
 
-async function extract(path: string, delimiter?: string): Promise<Table> {
-  const extension = extname(path).toLowerCase();
-
-  switch (extension) {
-    case '.csv':
-    case '.tsv':
-    case '.txt':
-      return extractCsv(path, delimiter ? { delimiter } : {});
-    case '.xls':
-    case '.xlsx':
-      throw new Error(
-        'Spreadsheet support is not implemented yet. For now, open the file ' +
-          'and save it as CSV, then run this again.',
-      );
-    case '.pdf':
-      throw new Error(
-        'PDF support is not implemented yet. If your bank offers XLS or CSV ' +
-          'through internet banking, prefer that — it is far more reliable ' +
-          'than extracting tables from a PDF.',
-      );
-    default:
-      throw new Error(`Unsupported file type: ${extension || path}`);
-  }
-}
-
 function defaultOutPath(input: string): string {
   const extension = extname(input);
   const name = basename(input, extension);
@@ -165,7 +142,20 @@ async function run(args: string[]): Promise<number> {
     );
   }
 
-  const table = await extract(options.input, options.delimiter);
+  if (extname(options.input).toLowerCase() === '.pdf') {
+    throw new Error(
+      'PDF support is not implemented yet. If your bank offers XLS or CSV ' +
+        'through internet banking, prefer that — it is far more reliable than ' +
+        'extracting tables from a PDF.',
+    );
+  }
+
+  const { table, format } = await extractTable(
+    options.input,
+    options.delimiter ? { delimiter: options.delimiter } : {},
+  );
+  log(`Read ${options.input} as ${describeFormat(format)}`);
+
   const result = interpretTable(table, {
     dateOrder: options.dateOrder,
     ...(merchantRules.length ? { merchantRules } : {}),
