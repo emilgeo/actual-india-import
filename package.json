@@ -1,0 +1,31 @@
+{
+  "name": "actual-india-import",
+  "version": "0.1.0",
+  "description": "Convert Indian bank statements (CSV, XLS, PDF) into Actual Budget transactions with real merchant names",
+  "license": "MIT",
+  "author": "emilgeo",
+  "bin": {
+    "actual-india-import": "./dist/cli.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6",
+    "csv-stringify": "^6.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

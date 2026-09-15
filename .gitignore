@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Never commit real statements or anything derived from them.
+statements/
+*.pdf
+*.xls
+*.xlsx
+out/
+.env
+.merchants.local.json
