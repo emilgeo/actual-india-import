@@ -11,3 +11,6 @@ dist/
 .actual-cache/
 .env
 .merchants.local.json
+
+# Scratch scripts for local verification, never published.
+*.local.ts
