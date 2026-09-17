@@ -156,6 +156,25 @@ npx tsx src/cli.ts statement.xls --push --account "ICICI Savings"
 
 `--dry-run` maps onto Actual's own preview mode, so nothing is written.
 
+### Review before you push
+
+The tool reads its own output, so you can check — and correct — the CSV before
+anything reaches your budget:
+
+```bash
+npx tsx src/cli.ts statement.pdf              # writes statement.actual.csv
+$EDITOR statement.actual.csv                  # fix a payee or two
+npx tsx src/cli.ts statement.actual.csv --push --account "ICICI Savings"
+```
+
+Payees you edited are kept **verbatim** — converted output is passed through,
+never re-parsed, so your corrections are not undone. The `Reference` column
+survives too, so deduplication still works.
+
+One caveat: the CSV carries no balance column, so a run over converted output
+cannot re-verify the amounts and will say so. The check that matters already
+ran when the CSV was produced — read that line before trusting the file.
+
 The API path is better than the CSV path in two ways:
 
 - **`imported_payee` is set properly.** The cleaned merchant goes to

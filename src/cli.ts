@@ -4,6 +4,10 @@ import { argv, cwd, env, exit, stderr, stdout } from 'node:process';
 
 import { loadEnvironmentFile, setting } from './env-file.js';
 import { describeFormat, extractTable } from './extract/index.js';
+import {
+  interpretConvertedOutput,
+  isConvertedOutput,
+} from './interpret/roundtrip.js';
 import { interpretTable } from './interpret/rows.js';
 import { validateBalances } from './interpret/validate.js';
 import type { DateOrder } from './interpret/values.js';
@@ -215,10 +219,22 @@ async function run(args: string[]): Promise<number> {
   });
   log(`Read ${options.input} as ${describeFormat(format)}`);
 
-  const result = interpretTable(table, {
-    dateOrder: options.dateOrder,
-    ...(merchantRules.length ? { merchantRules } : {}),
-  });
+  // Our own output is passed through rather than re-parsed, so that payees
+  // corrected by hand in the CSV survive.
+  const converted = isConvertedOutput(table);
+  if (converted) {
+    log(
+      'Recognised this as already-converted output: payees kept as-is, ' +
+        'narrations kept in Notes.',
+    );
+  }
+
+  const result = converted
+    ? interpretConvertedOutput(table)
+    : interpretTable(table, {
+        dateOrder: options.dateOrder,
+        ...(merchantRules.length ? { merchantRules } : {}),
+      });
 
   if (!result) {
     stderr.write(
@@ -277,6 +293,16 @@ async function run(args: string[]): Promise<number> {
     );
   } else {
     log(`Balance check skipped: ${validation.issues[0] ?? 'no balance data'}`);
+    if (converted) {
+      // Said plainly, because it is the one real cost of the round trip: the
+      // CSV carries no balance column, so these amounts are not independently
+      // verified here. They were when the CSV was produced.
+      log(
+        'Converted output carries no balance column, so this run cannot ' +
+          're-verify the amounts. Check the balance line from the run that ' +
+          'produced this CSV.',
+      );
+    }
   }
 
   if (pushConfig) {

@@ -15,8 +15,19 @@ import type { StatementTransaction } from '../interpret/rows.js';
  * properly — this is the one place the CSV route is lossier.
  *
  * `Reference` is emitted for human inspection; leave it unmapped on import.
+ *
+ * This header is also the signature the round-trip path matches on, so that
+ * the tool can read its own output back and push a CSV you have reviewed.
+ * Renaming or reordering a column here means updating
+ * `interpret/roundtrip.ts`; a test asserts the two agree.
  */
-const COLUMNS = ['Date', 'Payee', 'Notes', 'Amount', 'Reference'] as const;
+export const COLUMNS = [
+  'Date',
+  'Payee',
+  'Notes',
+  'Amount',
+  'Reference',
+] as const;
 
 export function toCsv(transactions: StatementTransaction[]): string {
   const rows = transactions.map(transaction => [
