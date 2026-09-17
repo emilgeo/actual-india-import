@@ -2,6 +2,7 @@
 import { basename, dirname, extname, join } from 'node:path';
 import { argv, cwd, env, exit, stderr, stdout } from 'node:process';
 
+import { loadEnvironmentFile, setting } from './env-file.js';
 import { describeFormat, extractTable } from './extract/index.js';
 import { interpretTable } from './interpret/rows.js';
 import { validateBalances } from './interpret/validate.js';
@@ -27,6 +28,7 @@ Options:
   --delimiter <char>    Force the CSV delimiter instead of detecting it.
   --merchants <path>    JSON file of { pattern, name } merchant rules, which
                         take precedence over the built-in map.
+  --env-file <path>     Read settings from this file instead of ./.env.
   --force               Write the CSV even if the balance check fails.
   --quiet               Only report problems.
   --help                Show this message.
@@ -36,20 +38,24 @@ Pushing straight into Actual (instead of writing a CSV):
   --account <name|id>   Which Actual account to import into. Required for --push.
   --dry-run             With --push, report what would change without writing.
 
-  Credentials come from the environment, never from flags (a flag would end up
-  in your shell history):
+  --push needs the API package: npm install @actual-app/api
+
+Settings come from a .env file in the current directory, or from real
+environment variables, which take precedence. Never from flags, which would
+end up in your shell history. Copy .env.example to .env to get started.
+
     ACTUAL_SERVER_URL           e.g. https://actual.example.com
-    ACTUAL_PASSWORD             your server password
+    ACTUAL_PASSWORD             your Actual server password
     ACTUAL_SYNC_ID              the budget's sync id (Settings > Advanced)
     ACTUAL_ENCRYPTION_PASSWORD  only if the budget file is encrypted
     ACTUAL_DATA_DIR             local cache dir (default: ./.actual-cache)
-
-  --push needs the API package: npm install @actual-app/api
+    STATEMENT_PASSWORD          password for an encrypted statement PDF
+                                (not the same as ACTUAL_PASSWORD)
 
 Input is detected by content, not by extension, because banks routinely name
-HTML tables ".xls". Supported: CSV/TSV, Excel .xlsx, HTML tables, and Excel
-2003 XML. Legacy binary .xls must be re-saved as .xlsx or .csv first. PDF is
-not implemented yet.
+HTML tables ".xls". Supported: CSV/TSV, Excel .xlsx, HTML tables, Excel 2003
+XML, and PDF (including password-protected). Legacy binary .xls must be
+re-saved as .xlsx or .csv first.
 `.trim();
 
 type Options = {
@@ -64,6 +70,7 @@ type Options = {
   push: boolean;
   account?: string;
   dryRun: boolean;
+  envFile?: string;
 };
 
 function parseArgs(args: string[]): Options | null {
@@ -112,6 +119,9 @@ function parseArgs(args: string[]): Options | null {
         break;
       case '--merchants':
         options.merchants = next();
+        break;
+      case '--env-file':
+        options.envFile = next();
         break;
       case '--push':
         options.push = true;
@@ -173,6 +183,16 @@ async function run(args: string[]): Promise<number> {
     }
   };
 
+  // Before anything reads the environment. Both the statement password and the
+  // Actual credentials can come from here.
+  const envFile = loadEnvironmentFile(options.envFile ?? join(cwd(), '.env'));
+  if (envFile.loaded) {
+    log(`Loaded environment from ${envFile.path}`);
+  } else if (options.envFile) {
+    // Explicitly asked for, so silence would be wrong.
+    throw new Error(`${options.envFile} does not exist`);
+  }
+
   let merchantRules: MerchantRule[] = [];
   if (options.merchants) {
     merchantRules = await loadMerchantRules(options.merchants);
@@ -185,8 +205,9 @@ async function run(args: string[]): Promise<number> {
   // immediately rather than after processing the whole statement.
   const pushConfig = options.push ? pushConfigFromEnv(options) : null;
 
-  // Read from the environment, not a flag, so it stays out of shell history.
-  const pdfPassword = env.STATEMENT_PASSWORD;
+  // From .env or the environment, never a flag, so it stays out of shell
+  // history.
+  const pdfPassword = setting('STATEMENT_PASSWORD');
 
   const { table, format } = await extractTable(options.input, {
     ...(options.delimiter ? { delimiter: options.delimiter } : {}),
@@ -300,21 +321,21 @@ function pushConfigFromEnv(options: Options): PushConfig {
 
   const missing = (
     ['ACTUAL_SERVER_URL', 'ACTUAL_PASSWORD', 'ACTUAL_SYNC_ID'] as const
-  ).filter(name => !env[name]);
+  ).filter(name => !setting(name));
   if (missing.length) {
     throw new Error(
-      `--push needs these environment variables: ${missing.join(', ')}\n` +
-        'See --help for the full list.',
+      `--push needs these settings: ${missing.join(', ')}\n` +
+        'Set them in .env or in the environment. See --help for the full list.',
     );
   }
 
-  const encryptionPassword = env.ACTUAL_ENCRYPTION_PASSWORD;
+  const encryptionPassword = setting('ACTUAL_ENCRYPTION_PASSWORD');
 
   return {
-    serverURL: env.ACTUAL_SERVER_URL as string,
-    password: env.ACTUAL_PASSWORD as string,
-    syncId: env.ACTUAL_SYNC_ID as string,
-    dataDir: env.ACTUAL_DATA_DIR ?? join(cwd(), '.actual-cache'),
+    serverURL: setting('ACTUAL_SERVER_URL') as string,
+    password: setting('ACTUAL_PASSWORD') as string,
+    syncId: setting('ACTUAL_SYNC_ID') as string,
+    dataDir: setting('ACTUAL_DATA_DIR') ?? join(cwd(), '.actual-cache'),
     account: options.account,
     dryRun: options.dryRun,
     ...(encryptionPassword ? { encryptionPassword } : {}),

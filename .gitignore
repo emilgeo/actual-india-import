@@ -9,8 +9,10 @@ dist/
 *.xlsx
 /out/
 .actual-cache/
-.env
 .merchants.local.json
+
+.env*
+!.env.example
 
 # Scratch scripts for local verification, never published.
 *.local.ts

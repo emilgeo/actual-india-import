@@ -79,8 +79,8 @@ The format is detected by **inspecting the file**
 is the one format not supported. Use the PDF instead — it works directly.
 
 **Note for Federal Bank:** statements are PDF-only from the app and are
-password-protected. Pass the password through `STATEMENT_PASSWORD` (see
-below).
+password-protected. Put the password in your `.env` as `STATEMENT_PASSWORD`
+(see [Settings](#settings)).
 
 ```
 Read statement.xls as HTML table (a .xls file that is really HTML)
@@ -100,8 +100,39 @@ Actual remembers that mapping per account, so you only do it once.
 | `--date-order dmy\|mdy\|ymd` | Only affects all-numeric dates, where `01/02/2024` is genuinely ambiguous. Default `dmy`. |
 | `--delimiter <char>`         | Force the CSV delimiter instead of detecting it.                                          |
 | `--merchants <path>`         | Your own merchant rules (see below).                                                      |
+| `--env-file <path>`          | Read settings from this file instead of `./.env`.                                         |
 | `--force`                    | Write even if the balance check fails.                                                    |
 | `--quiet`                    | Only report problems.                                                                     |
+
+### Settings
+
+Passwords and server details are read from a `.env` file in the current
+directory, never from command-line flags — a flag ends up in your shell history
+and in process listings.
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+Real environment variables take precedence over the file, so a one-off override
+still works without editing it, and CI can inject secrets with no file present:
+
+```bash
+ACTUAL_SYNC_ID=other-budget npx tsx src/cli.ts statement.pdf --push --account Savings
+```
+
+| Setting                      | Purpose                                               |
+| ---------------------------- | ----------------------------------------------------- |
+| `STATEMENT_PASSWORD`         | Password on an encrypted statement PDF.               |
+| `ACTUAL_SERVER_URL`          | Your Actual sync server.                              |
+| `ACTUAL_PASSWORD`            | Password for that server. Not the statement password. |
+| `ACTUAL_SYNC_ID`             | Budget to import into: Settings > Advanced > Sync ID. |
+| `ACTUAL_ENCRYPTION_PASSWORD` | Only for end-to-end encrypted budgets.                |
+| `ACTUAL_DATA_DIR`            | Local budget cache. Default `./.actual-cache`.        |
+
+None of this is needed to convert a statement to CSV, unencrypted PDFs
+included.
 
 ## Pushing straight into Actual
 
@@ -112,15 +143,10 @@ This needs the API package:
 npm install @actual-app/api
 ```
 
-Credentials come from the environment, never from flags — a flag ends up in
-your shell history and in process listings:
+Set `ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD` and `ACTUAL_SYNC_ID` in your `.env`
+(see [Settings](#settings)), then:
 
 ```bash
-export ACTUAL_SERVER_URL=https://actual.example.com
-export ACTUAL_PASSWORD='...'
-export ACTUAL_SYNC_ID='...'                # Settings > Advanced > Sync ID
-# export ACTUAL_ENCRYPTION_PASSWORD='...'  # only for encrypted budgets
-
 # Always preview first:
 npx tsx src/cli.ts statement.xls --push --account "ICICI Savings" --dry-run
 # [dry run] ICICI Savings: would add 34, would update 0.
@@ -192,11 +218,12 @@ harder than it sounds and is why the balance check matters most here. Handled:
 - **Dates in the preamble.** Federal prints `Account Open Date : 25/03/2013`
   above the table, so transactions are only read from below the header row.
 
-For an encrypted PDF, supply the password through the environment so it stays
-out of your shell history:
+For an encrypted PDF, put the password in your `.env` as
+`STATEMENT_PASSWORD` (see [Settings](#settings)) so it stays out of your shell
+history, then run the tool normally:
 
 ```bash
-STATEMENT_PASSWORD='...' npx tsx src/cli.ts statement.pdf
+npx tsx src/cli.ts statement.pdf
 ```
 
 ### Known limitation
