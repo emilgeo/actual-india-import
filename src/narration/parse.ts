@@ -257,6 +257,21 @@ function tokenize(raw: string): Tokenized {
   };
 }
 
+/**
+ * Remove VPA words, leaving the rest of each field intact. A VPA is resolved on
+ * its own path, so it must not also compete as name text: a field holding both
+ * would otherwise be picked whole and title-cased with the VPA still in it.
+ */
+function withoutVpas(tokens: string[]): string[] {
+  return tokens
+    .map(token =>
+      subTokens([token])
+        .filter(word => !VPA_TOKEN.test(word))
+        .join(' '),
+    )
+    .filter(Boolean);
+}
+
 /** Tokens split down to whitespace, for shape matching. */
 function subTokens(tokens: string[]): string[] {
   return tokens.flatMap(token => token.split(/\s+/)).filter(Boolean);
@@ -312,9 +327,43 @@ function letterCount(value: string): number {
 function isOpaqueReference(bare: string): boolean {
   // Eight characters rather than twelve: PDF extraction can break a long
   // reference across lines, leaving a short tail such as `b9cc0dd2ee` that
-  // would otherwise qualify as a name. Requiring both letters and digits keeps
-  // real names safe, since names do not contain digits.
-  return bare.length >= 8 && /\d/.test(bare) && /[a-z]/.test(bare);
+  // would otherwise qualify as a name.
+  if (bare.length < 8 || !/\d/.test(bare) || !/[a-z]/.test(bare)) {
+    return false;
+  }
+
+  // "Letters and digits" alone rejected merchant handles, which are a name with
+  // a numeric id appended. What separates the two is arrangement: a reference
+  // interleaves them (`axl1aa2bb3cc`), so its longest letter run is short.
+  if (longestLetterRun(bare) < 6) {
+    return true;
+  }
+
+  // Some provider references have long letter runs too, but scatter digits
+  // through them. A name carrying an id has one digit group, usually trailing.
+  return digitGroupCount(bare) > 1;
+}
+
+function digitGroupCount(value: string): number {
+  return (value.match(/\d+/g) ?? []).length;
+}
+
+function longestLetterRun(value: string): number {
+  return (value.match(/[a-z]+/gi) ?? []).reduce(
+    (longest, run) => Math.max(longest, run.length),
+    0,
+  );
+}
+
+/**
+ * The most words a payee name can plausibly have. Statement name fields are
+ * short, so a very wordy field is a leaked page footer or branch address, which
+ * being mostly letters would otherwise beat the real name.
+ */
+const MAX_NAME_WORDS = 6;
+
+function wordCount(value: string): number {
+  return value.trim().split(/\s+/).filter(Boolean).length;
 }
 
 function isMerchantCandidate(token: string): boolean {
@@ -330,6 +379,9 @@ function isMerchantCandidate(token: string): boolean {
     return false;
   }
   if (MASKED_TOKEN.test(token) || isOpaqueReference(bare)) {
+    return false;
+  }
+  if (wordCount(token) > MAX_NAME_WORDS) {
     return false;
   }
   // Needs a real word. Three letters rather than two, because date ranges in
@@ -400,6 +452,37 @@ function titleCase(value: string): string {
 }
 
 /**
+ * Payment-service suffixes that appear inside a VPA local-part rather than
+ * after the `@`: `something.rz` / `.rzp` is Razorpay, `.ibz` Ibibo. They
+ * identify the gateway, not the merchant.
+ */
+const HANDLE_SUFFIX = /\.(rz|rzp|ibz|payu|cf|eko)$/i;
+
+/**
+ * Clean a merchant handle into a name: `merchantname123456.rz` -> `Merchantname`.
+ *
+ * Federal writes UPI counterparties as a bare handle with no `@psp` part at
+ * all. The trailing digits identify the merchant's payment account, so keeping
+ * them gives a payee per account rather than per merchant.
+ */
+function cleanHandle(token: string): string {
+  const withoutSuffix = token.replace(HANDLE_SUFFIX, '');
+
+  return withoutSuffix
+    .replace(/[._-]+/g, ' ')
+    .split(/\s+/)
+    .filter(word => !/^\d+$/.test(word))
+    .map(word => word.replace(/\d+$/, ''))
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Does this token look like a bare merchant handle rather than plain words? */
+function isHandle(token: string): boolean {
+  return /\d/.test(token) || HANDLE_SUFFIX.test(token);
+}
+
+/**
  * Turn a VPA into a readable name: `bharatpe90771@yesbankltd` -> `Bharatpe`,
  * `john.doe@oksbi` -> `John Doe`. Returns null for phone-number VPAs like
  * `9876543210@ybl`, where nothing readable remains.
@@ -419,6 +502,26 @@ function nameFromVpa(vpa: string): string | null {
     return null;
   }
   return titleCase(words.join(' '));
+}
+
+/**
+ * Name text sharing a field with the VPA, e.g. `firstname. last9@oksbi`, where
+ * the VPA's local-part holds only part of the name.
+ *
+ * Restricted to the field the VPA is in. Names in other fields are already
+ * handled as candidates, and pulling those in would merge payer with payee.
+ */
+function nameBesideVpa(tokens: string[], vpa: string): string | null {
+  const field = tokens.find(token => subTokens([token]).includes(vpa));
+  if (!field) {
+    return null;
+  }
+
+  const words = subTokens([field]).filter(
+    word => word !== vpa && isMerchantCandidate(word),
+  );
+
+  return words.length ? words.join(' ') : null;
 }
 
 export type ParseNarrationOptions = {
@@ -444,7 +547,7 @@ export function parseNarration(
   const vpa = extractVpa(tokens);
   const ref = extractRef(tokens);
   const kind = detectKind(tokens);
-  const candidate = pickCandidate(tokens, phraseMode);
+  const candidate = pickCandidate(withoutVpas(tokens), phraseMode);
 
   // Parenthesised deliberately: `a ?? b || c` is a syntax error in JS.
   const merchant =
@@ -513,11 +616,17 @@ function resolveMerchant({
   // better normalised.
   const candidateIsMultiWord = !!candidate && /\s/.test(candidate.trim());
   if (candidateIsMultiWord) {
-    return titleCase(candidate);
+    return titleCase(cleanHandle(candidate));
   }
 
   if (vpa) {
     const fromVpa = nameFromVpa(vpa);
+    // Words sharing the field with the VPA belong to the same name, and the
+    // VPA's local-part is often only part of it.
+    const beside = nameBesideVpa(tokens, vpa);
+    if (beside) {
+      return titleCase(cleanHandle(`${beside} ${fromVpa ?? ''}`.trim()));
+    }
     if (fromVpa) {
       return fromVpa;
     }
@@ -529,7 +638,9 @@ function resolveMerchant({
   }
 
   if (candidate) {
-    return titleCase(candidate);
+    // Handles carry a per-account numeric id; stripping it keeps one payee per
+    // merchant instead of one per merchant account.
+    return titleCase(isHandle(candidate) ? cleanHandle(candidate) : candidate);
   }
 
   // A recurring mandate has no name in its narration, only the collecting

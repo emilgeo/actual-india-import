@@ -1,19 +1,14 @@
 /**
- * Read this tool's own CSV output back in.
+ * Read this tool's own CSV output back in, so a reviewed and hand-corrected CSV
+ * can be pushed.
  *
- * Convert, review the CSV, correct a payee or two, then push is a sensible
- * workflow — and the safest way to use `--push`, since you see exactly what
- * will land before it does. Without this the tool cannot read its own output:
- * generic header detection requires a *description* column, and neither
- * `Payee` nor `Notes` matches any bank's narration vocabulary.
+ * Generic header detection requires a description column, and neither `Payee`
+ * nor `Notes` matches any bank's narration vocabulary, so without this path the
+ * tool cannot read its own output.
  *
- * Adding `payee`/`notes` to that vocabulary would have been the smaller
- * change, and the wrong one. It would feed the Notes column back through
- * narration parsing and overwrite the Payee column — discarding exactly the
- * manual corrections that make the round trip worth doing.
- *
- * So converted output is recognised by its exact header and passed through:
- * payees are kept verbatim, never re-derived.
+ * Adding `payee`/`notes` to that vocabulary instead would feed the Notes column
+ * back through narration parsing and overwrite the Payee column, discarding the
+ * manual corrections. Hence an exact-header match with payees kept verbatim.
  */
 
 import type { Table } from '../extract/types.js';
@@ -25,12 +20,7 @@ import { parseAmount, parseStatementDate } from './values.js';
 /** The header `toCsv` writes. Must stay in step with `COLUMNS` there. */
 const CONVERTED_HEADER = ['date', 'payee', 'notes', 'amount', 'reference'];
 
-/**
- * Column map describing converted output, for reporting only.
- *
- * `description: 2` points at Notes because that is where the narration lives,
- * even though it is not re-parsed.
- */
+/** For reporting only. `description: 2` is Notes, though it is not re-parsed. */
 const CONVERTED_MAP: ColumnMap = {
   date: 0,
   description: 2,
@@ -43,12 +33,11 @@ function normalize(cell: string): string {
 }
 
 /**
- * Does this table look like output we produced?
+ * Does this table look like output this tool produced?
  *
- * Deliberately strict — an exact header match, in order. A bank CSV that
- * happens to have a `Payee` column must still go down the generic path, where
- * its narration gets parsed. Requiring all five columns in the same order
- * makes a false positive essentially impossible.
+ * Strict by design: an exact header match, in order. A bank CSV that happens to
+ * have a `Payee` column must still take the generic path so its narration gets
+ * parsed.
  */
 export function isConvertedOutput(table: Table): boolean {
   const header = table.rows[0];
@@ -67,7 +56,7 @@ export function isConvertedOutput(table: Table): boolean {
  * Interpret converted output, taking every field at face value.
  *
  * The amount is already signed, the date already ISO, and the payee already
- * resolved — possibly by hand. Nothing here re-derives any of it.
+ * resolved, possibly by hand. Nothing here re-derives any of it.
  */
 export function interpretConvertedOutput(table: Table): Interpreted {
   const transactions: StatementTransaction[] = [];
@@ -98,9 +87,7 @@ export function interpretConvertedOutput(table: Table): Interpreted {
     transactions.push({
       date,
       amount,
-      // A row whose Payee was blanked out still needs a payee, and the
-      // narration is the best available answer — the same fallback the
-      // narration parser uses.
+      // A blanked-out Payee still needs a value; same fallback as the parser.
       payee: payee || notes || 'Unknown',
       raw: notes,
       // Already-converted rows carry no narration to classify, and the kind is

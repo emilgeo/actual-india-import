@@ -97,6 +97,10 @@ export const MERCHANT_RULES: MerchantRule[] = [
   { pattern: /^(razorpay|rzp)/, name: 'Razorpay' },
   { pattern: /^(billdesk|ccavenue|payu|cashfree)/, name: 'Payment Gateway' },
 
+  // State enterprises and institutions.
+  // Reached via a truncated handle rather than a spelled-out name
+  { pattern: /^thekeralastate(f|financial)/, name: 'KSFE' },
+
   // Investing
   { pattern: /^(zerodha|kite)/, name: 'Zerodha' },
   { pattern: /^(groww|nextbillion)/, name: 'Groww' },
@@ -121,6 +125,8 @@ export const MERCHANT_RULES: MerchantRule[] = [
 export const POSTING_RULES: MerchantRule[] = [
   { pattern: /wtaxpd/, name: 'Withholding Tax' },
   { pattern: /intpd/, name: 'Interest Paid' },
+  // Savings-bank interest, written `SBINT:29-06-2026`.
+  { pattern: /sbint/, name: 'Interest Paid' },
   // Minimum average balance charge, billed monthly as `MABChgs-Mar2026`.
   { pattern: /mabchgs/, name: 'Minimum Balance Charge' },
   { pattern: /autodebitcc/, name: 'Credit Card Autopay' },

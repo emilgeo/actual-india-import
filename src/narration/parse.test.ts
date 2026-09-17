@@ -322,7 +322,9 @@ describe('parseNarration with Federal channel codes', () => {
   it('reads the route from the second word of a combined field', () => {
     // `FT IMPS/IFI/...` puts the channel and the route in one field, so
     // matching only whole tokens would classify this as `other`.
-    const parsed = parseNarration('FT IMPS/IFI/100000000002/Mr A N OTHER/IMPSTXN');
+    const parsed = parseNarration(
+      'FT IMPS/IFI/100000000002/Mr A N OTHER/IMPSTXN',
+    );
 
     expect(parsed.kind).toBe('imps');
     expect(parsed.merchant).toBe('Mr A N Other');
@@ -341,5 +343,110 @@ describe('parseNarration with Federal channel codes', () => {
 
     expect(first.merchant).toBe('0000000000000000@bank000');
     expect(second.merchant).toBe(first.merchant);
+  });
+
+  it('names a merchant written as a bare handle with no @psp part', () => {
+    // A handle with the `@psp` part missing does not look like a VPA, and
+    // Mixing letters with digits made it read as a machine reference, which
+    // left no name at all, so the whole narration became the payee.
+    const parsed = parseNarration(
+      'UPIOUT/100000000001 /thekeralastatefin123456.rz/0000',
+    );
+
+    expect(parsed.merchant).toBe('KSFE');
+    expect(parsed.merchant).not.toContain('UPIOUT');
+  });
+
+  it('collapses a handle that carries a per-account numeric id', () => {
+    // The digits identify the merchant's payment account, not the transaction.
+    const parsed = parseNarration('UPIOUT/100000000001 /somemerchant9912.rz/1');
+
+    expect(parsed.merchant).toBe('Somemerchant');
+  });
+
+  it('keeps a leaked page footer out of the payee', () => {
+    // A footer leaking into the narration arrives as one very wordy field.
+    // Being almost all letters, it would win a longest-letters rule outright.
+    const parsed = parseNarration(
+      'UPIOUT/100000000002 /thekeralastatefin123456.rz/0000 Some Bank Ltd. ' +
+        'Corporate Office: Some Towers, Market Rd, Some Nagar, Somewhere, ' +
+        'Someplace, 600001,',
+    );
+
+    expect(parsed.merchant).toBe('KSFE');
+    expect(parsed.merchant).not.toMatch(/corporate office|towers/i);
+  });
+
+  it('gives the same payee whether or not a footer leaked in', () => {
+    // Same merchant on both rows, so they must not become two payees.
+    const withFooter = parseNarration(
+      'UPIOUT/100000000002 /thekeralastatefin123456.rz/0000 Some Bank Ltd. ' +
+        'Corporate Office: Some Towers, Somewhere, Someplace, 600001,',
+    );
+    const withoutFooter = parseNarration(
+      'UPIOUT/100000000001 /thekeralastatefin123456.rz/0000',
+    );
+
+    expect(withFooter.merchant).toBe(withoutFooter.merchant);
+  });
+
+  it('keeps a digitless address out of the payee', () => {
+    // The footer above carries a pincode, which alone is enough to reject it.
+    // Truncated before the pincode it has no digits, and then only its number
+    // of words marks it as not-a-name.
+    const parsed = parseNarration(
+      'UPIOUT/100000000002 /somemerchant.rz/Some Bank Ltd. Corporate ' +
+        'Office: Some Towers, Market Rd, Some Nagar, Somewhere',
+    );
+
+    expect(parsed.merchant).toBe('Somemerchant');
+    expect(parsed.merchant).not.toMatch(/corporate|towers|somewhere/i);
+  });
+
+  it('completes a name split between the field text and the VPA', () => {
+    // The name and the VPA share one field, and the VPA's local-part holds
+    // only the second half of the name, which alone gives `Lastname`.
+    const parsed = parseNarration(
+      'UPIOUT/100000000003/firstname. lastname9@oksbi/Payment/0000',
+    );
+
+    expect(parsed.merchant).toBe('Firstname Lastname');
+    expect(parsed.vpa).toBe('lastname9@oksbi');
+  });
+
+  it('does not merge a name from a different field into the VPA name', () => {
+    // The guard on the above: `SWIGGY` and `swiggy@ybl` are separate fields,
+    // and in narrations naming both payer and payee, merging across fields
+    // would splice two people together.
+    const parsed = parseNarration(
+      'UPI/DR/412345678901/SWIGGY/YESB/swiggy@ybl/Payment',
+    );
+
+    expect(parsed.merchant).toBe('Swiggy');
+  });
+
+  it('rejects a machine reference whose letter runs are long', () => {
+    // Letting handles through on the strength of a long letter run also let
+    // this shape in. Digits scattered through it are the giveaway: a name
+    // carrying an id has one digit group, not five.
+    const parsed = parseNarration(
+      'MMT/IMPS/612345678901/ZZTOPQ0111ABCDEFGH2IJ3KL MNOPQR0X44STUV/Mr A N ' +
+        'OTHER/IDFC bank',
+    );
+
+    expect(parsed.merchant).toBe('Mr A N Other');
+    expect(parsed.merchant).not.toMatch(/zztopq|mnopqr/i);
+  });
+
+  it('still rejects a genuine machine reference as a name', () => {
+    // The counterweight to letting handles through: provider references
+    // interleave letters and digits, so no long letter run exists.
+    const parsed = parseNarration(
+      'UPI/A N OTHER/another@axl/Payment fr/FEDERAL BA/100000000001/' +
+        'AXL1aa2bb3cc4dd5ee6ff7aa8b',
+    );
+
+    expect(parsed.merchant).toBe('A N Other');
+    expect(parsed.merchant).not.toMatch(/axl1aa/i);
   });
 });

@@ -94,13 +94,13 @@ describe('interpretConvertedOutput', () => {
 
   it('keeps a hand-corrected payee verbatim instead of re-deriving it', () => {
     // The whole reason for a dedicated path. Re-parsing the narration would
-    // resolve this back to `A N Other` and throw the correction away.
+    // resolve this back to the parsed name and throw the correction away.
     const rows = rowsOf(toCsv(transactions));
-    rows[1]![1] = 'Rent — landlord';
+    rows[1]![1] = 'Rent (landlord)';
 
     const result = interpretConvertedOutput(table(rows));
 
-    expect(result.transactions[0]?.payee).toBe('Rent — landlord');
+    expect(result.transactions[0]?.payee).toBe('Rent (landlord)');
     expect(result.transactions[0]?.raw).toContain('IMPS-OPM');
   });
 
