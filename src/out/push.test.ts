@@ -45,6 +45,28 @@ describe('toImportEntities', () => {
     });
   });
 
+  it('writes the narration to notes as well as imported_payee', () => {
+    // Both, not either. `imported_payee` is what Actual's payee matching uses
+    // but is not a column you can read at a glance; Notes is the one you can
+    // see, search and filter. Setting only the former left the narration
+    // effectively invisible after a push.
+    const [entity] = toImportEntities([transaction()]);
+
+    expect(entity?.notes).toBe(
+      'UPI/DR/412345678901/SWIGGY/YESB/swiggy@ybl/Payment',
+    );
+    expect(entity?.imported_payee).toBe(entity?.notes);
+  });
+
+  it('keeps notes as the full narration even when the payee is unrecognisable', () => {
+    // The case where notes matters most: nothing useful was extracted, so the
+    // narration is the only record of what the transaction actually was.
+    const raw = '000011002200 FD clos 13-03-2026 A N OTHER';
+    const [entity] = toImportEntities([transaction({ payee: 'Unknown', raw })]);
+
+    expect(entity?.notes).toBe(raw);
+  });
+
   it('sets imported_id only when a reference survived the safety checks', () => {
     const withRef = toImportEntities([transaction({ ref: '412345678901' })]);
     const withoutRef = toImportEntities([transaction()]);

@@ -12,6 +12,7 @@ export type ActualImportTransaction = {
   amount: number;
   payee_name: string;
   imported_payee: string;
+  notes: string;
   imported_id?: string;
   cleared: boolean;
 };
@@ -49,9 +50,14 @@ export function toPaise(amount: number): number {
  *
  * - `payee_name` gets the cleaned merchant and `imported_payee` the original
  *   narration, which is exactly what those fields are for: the payee collapses
- *   correctly while the raw text stays visible in the UI. This is the one
- *   thing the CSV output cannot do, since Actual's CSV field mapping has no
- *   `imported_payee` slot.
+ *   correctly while Actual's payee matching still sees the raw text. This is
+ *   the one thing the CSV output cannot do, since Actual's CSV field mapping
+ *   has no `imported_payee` slot.
+ * - `notes` also gets the narration, duplicating `imported_payee`. That
+ *   duplication looked redundant and was originally left out, which was wrong:
+ *   `imported_payee` is not a column you can read at a glance, whereas Notes
+ *   is one you can see, search and filter. Without it the narration is
+ *   effectively invisible after a push.
  * - `imported_id` is only set when a reference survived the uniqueness checks.
  *   Omitting it is the safe default: Actual falls back to matching on date and
  *   amount within a week, whereas a non-unique id makes it treat distinct
@@ -65,6 +71,7 @@ export function toImportEntities(
     amount: toPaise(transaction.amount),
     payee_name: transaction.payee,
     imported_payee: transaction.raw,
+    notes: transaction.raw,
     ...(transaction.ref ? { imported_id: transaction.ref } : {}),
     // Statement rows have already settled at the bank.
     cleared: true,

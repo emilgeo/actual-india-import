@@ -159,9 +159,10 @@ npx tsx src/cli.ts statement.xls --push --account "ICICI Savings"
 The API path is better than the CSV path in two ways:
 
 - **`imported_payee` is set properly.** The cleaned merchant goes to
-  `payee_name` and the original narration to `imported_payee`, which is exactly
-  what those fields are for. The CSV path must put the narration in Notes
-  instead, because Actual's CSV field mapping has no `imported_payee` slot.
+  `payee_name` and the original narration to both `imported_payee` and `notes`.
+  The CSV path can only fill Notes, because Actual's CSV field mapping has no
+  `imported_payee` slot — and that field is what Actual's payee matching
+  learns from.
 - **`imported_id` enables real deduplication**, so re-importing an overlapping
   date range does not create duplicates.
 
