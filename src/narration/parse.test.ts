@@ -89,6 +89,19 @@ const cases: Case[] = [
     kind: 'atm',
   },
   {
+    name: 'a transfer to a bare account number names the account, not the VPA',
+    raw: 'UPIOUT/100000000003 /0000000000000000@BANK000/0000',
+    merchant: 'BANK 0000000000000000',
+    kind: 'upi',
+    ref: '100000000003',
+  },
+  {
+    name: 'a NACH dividend payout names the company',
+    raw: 'NACH/ACME3rdINTDiv01012026/1000001',
+    merchant: 'ACME Dividend',
+    kind: 'ach',
+  },
+  {
     name: 'trailing digits are stripped from an aggregator VPA',
     raw: 'UPI/DR/412345678901/BharatPe Merchant/YESB/bharatpe90771@yesbankltd/Payment',
     merchant: 'BharatPe',
@@ -330,10 +343,11 @@ describe('parseNarration with Federal channel codes', () => {
     expect(parsed.merchant).toBe('Mr A N Other');
   });
 
-  it('uses an account-number VPA as a stable payee', () => {
-    // Federal writes some counterparties as an account-number VPA. Nothing
-    // readable can be built from it, but it is stable, whereas the raw
-    // narration carries a per-transaction reference.
+  it('names the account behind an account-number transfer', () => {
+    // Federal addresses some transfers to a bare account number rather than to
+    // a handle, which is VPA-shaped but is not a VPA. Nothing names the
+    // counterparty, so the account is the identity: it is stable, whereas the
+    // raw narration carries a per-transaction reference.
     const first = parseNarration(
       'UPIOUT/100000000001 /0000000000000000@BANK000/0000',
     );
@@ -341,8 +355,60 @@ describe('parseNarration with Federal channel codes', () => {
       'UPIOUT/100000000009 /0000000000000000@BANK000/0000',
     );
 
-    expect(first.merchant).toBe('0000000000000000@bank000');
+    expect(first.merchant).toBe('BANK 0000000000000000');
     expect(second.merchant).toBe(first.merchant);
+    // It must not be reported as a VPA, because it is not one.
+    expect(first.vpa).toBeUndefined();
+  });
+
+  it('keeps a phone-number VPA a VPA', () => {
+    // The contrast with the case above: an all-digit local-part alone does not
+    // make something an account reference. The `@psp` part is what separates
+    // them, and a real handle never carries digits.
+    const parsed = parseNarration('UPI/412345678901/9876543210@ybl');
+
+    expect(parsed.vpa).toBe('9876543210@ybl');
+    expect(parsed.merchant).toBe('9876543210@ybl');
+  });
+
+  it('names a NACH payout after the company, not the payout', () => {
+    // The description field squashes company, purpose, date and sequence into
+    // one token, so only the leading word is stable. Falling back to the raw
+    // narration minted a new payee for every dividend.
+    const third = parseNarration('NACH/ACME3rdINTDiv01012026/1000001');
+    const fourth = parseNarration('NACH/ACME4thINTDiv01042026/1000002');
+
+    expect(third.kind).toBe('ach');
+    expect(third.merchant).toBe('ACME Dividend');
+    // The whole point: the next payout is the same payee.
+    expect(fourth.merchant).toBe(third.merchant);
+
+    // The sequence number must not be mistaken for a UTR.
+    expect(third.ref).toBeUndefined();
+  });
+
+  it('resolves a NACH company through the merchant map', () => {
+    // The leading word is looked up like any other name token, so a mapped
+    // company keeps its canonical spelling instead of being title-cased.
+    expect(
+      parseNarration('NACH/TCS3rdIntDiv01012026/1000003').merchant,
+    ).toBe('TCS Dividend');
+  });
+
+  it('only calls a NACH payout a dividend on a whole word', () => {
+    // `div` is a fragment of common Indian names, so a substring match here
+    // would label a person's transfer a dividend.
+    expect(parseNarration('NACH/DIVYAPRAKASH0512/8812').merchant).toBe(
+      'Divyaprakash',
+    );
+  });
+
+  it('leaves a NACH mandate reference ahead of the description field', () => {
+    // A mandate reference is the stronger identity, so it must still win.
+    expect(
+      parseNarration('ACH/HDFC BANK LTD/ICIC0000000000000001/446223826  26')
+        .merchant,
+    ).toBe('NACH ICIC0000000000000001');
   });
 
   it('names a merchant written as a bare handle with no @psp part', () => {

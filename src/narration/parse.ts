@@ -20,6 +20,20 @@ const UTR_TOKEN = /^\d{12}$/;
 const IFSC_TOKEN = /^[A-Z]{4}0[A-Z0-9]{6}$/i;
 
 /**
+ * An account number written in VPA shape, e.g. `0000000000000000@BANK000`.
+ *
+ * Federal uses this for a UPI transfer addressed to a bare account rather than
+ * to a handle. It matches `VPA_TOKEN`, but it is not a VPA and must not be
+ * treated as one: there is no readable local-part, so the VPA path ends up
+ * emitting the whole string as the payee.
+ *
+ * The discriminator is digits in the part after `@`. A PSP handle (`ybl`,
+ * `oksbi`, `yesbankltd`) never carries them, so phone-number VPAs such as
+ * `9876543210@ybl`, whose local-part is also all digits, are unaffected.
+ */
+const ACCOUNT_AT_BANK = /^(\d{6,})@([a-z]{2,})\d+$/i;
+
+/**
  * A NACH/ACH mandate reference: a four-letter bank code followed by a long
  * digit run, e.g. `ICIC0000000000000001`.
  *
@@ -292,7 +306,25 @@ function detectKind(tokens: string[]): NarrationKind {
 }
 
 function extractVpa(tokens: string[]): string | undefined {
-  return subTokens(tokens).find(token => VPA_TOKEN.test(token));
+  return subTokens(tokens).find(
+    token => VPA_TOKEN.test(token) && !ACCOUNT_AT_BANK.test(token),
+  );
+}
+
+/**
+ * `0000000000000000@BANK000` -> `BANK 0000000000000000`.
+ *
+ * Nothing names the counterparty here, so the account is the identity. It is
+ * stable per counterparty, unlike the raw narration, which carries the UTR.
+ */
+function nameFromAccountReference(tokens: string[]): string | null {
+  for (const token of subTokens(tokens)) {
+    const [, account, bank] = ACCOUNT_AT_BANK.exec(token) ?? [];
+    if (account && bank) {
+      return `${bank.toUpperCase()} ${account}`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -524,6 +556,73 @@ function nameBesideVpa(tokens: string[], vpa: string): string | null {
   return words.length ? words.join(' ') : null;
 }
 
+/**
+ * The named entity inside a NACH description field, e.g. the `TCS` of
+ * `ACME3rdINTDiv01012026`.
+ *
+ * A NACH collection or payout writes the company, the purpose, a date and a
+ * sequence number into one unspaced field, so only the leading letter run is
+ * stable. Everything after it changes with each payout and would otherwise
+ * mint a new payee each time.
+ */
+function nachEntity(
+  tokens: string[],
+): { name: string; rest: string[] } | null {
+  for (const token of subTokens(tokens)) {
+    const words = token
+      .split(SQUASHED_WORD_BOUNDARY)
+      .filter(word => /^[a-z]{3,}$/i.test(word));
+
+    const index = words.findIndex((word: string) => {
+      const bare = word.toLowerCase();
+      return (
+        !NOISE_TOKENS.has(bare) &&
+        !BANK_CODES.has(bare) &&
+        !NOISE_PATTERNS.some(pattern => pattern.test(bare))
+      );
+    });
+
+    const name = index >= 0 ? words[index] : undefined;
+    if (name) {
+      return { name, rest: words.slice(index + 1) };
+    }
+  }
+  return null;
+}
+
+/**
+ * Acronyms stay upper-case, longer names are title-cased. Length is the only
+ * available signal here: the field is unspaced and often wholly upper-case, so
+ * casing cannot distinguish `TCS` from `DIVYAPRAKASH`.
+ */
+const MAX_ACRONYM_LENGTH = 5;
+
+function nachEntityName(name: string): string {
+  if (name === name.toUpperCase() && name.length <= MAX_ACRONYM_LENGTH) {
+    return name;
+  }
+  return titleCase(name);
+}
+
+/**
+ * Word boundaries inside an unspaced description field: digit runs,
+ * separators, and both camel-case transitions. The second lookahead pair is
+ * what separates `INT` from `Div` in `INTDiv`, where the first (lower to
+ * upper) does not apply.
+ */
+const SQUASHED_WORD_BOUNDARY =
+  /\d+|[ ._-]|(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/;
+
+/**
+ * Is this NACH credit a dividend payout? `ACME3rdINTDiv01012026` -> yes.
+ *
+ * Matched on a whole word of the description rather than a substring, because
+ * `div` is a common fragment of Indian names (`DIVYA`) and of `INDIVIDUAL`.
+ */
+function isDividend(rest: string[]): boolean {
+  return rest.some(word => /^div(idend)?$/i.test(word));
+}
+
 export type ParseNarrationOptions = {
   /** User-supplied merchant rules; these take precedence over built-ins. */
   merchantRules?: MerchantRule[];
@@ -643,6 +742,13 @@ function resolveMerchant({
     return titleCase(isHandle(candidate) ? cleanHandle(candidate) : candidate);
   }
 
+  // A transfer addressed to an account number rather than to a handle. Ranked
+  // below every name, since the account is an identity and not a name.
+  const account = nameFromAccountReference(tokens);
+  if (account) {
+    return account;
+  }
+
   // A recurring mandate has no name in its narration, only the collecting
   // bank and the mandate reference. Naming it after the mandate keeps every
   // collection under one payee — otherwise the sequence number printed beside
@@ -652,6 +758,18 @@ function resolveMerchant({
     const mandate = subTokens(tokens).find(token => MANDATE_TOKEN.test(token));
     if (mandate) {
       return `NACH ${mandate.toUpperCase()}`;
+    }
+
+    // No mandate reference either, but the description field still leads with
+    // the company: `NACH/ACME3rdINTDiv01012026/1000001`. The run is rejected as
+    // a candidate above because the trailing date makes it look like a machine
+    // reference, so it is recovered here rather than falling through to the
+    // raw narration.
+    const entity = nachEntity(tokens);
+    if (entity) {
+      const name =
+        lookupMerchant(entity.name, rules) ?? nachEntityName(entity.name);
+      return isDividend(entity.rest) ? `${name} Dividend` : name;
     }
   }
 

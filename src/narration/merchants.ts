@@ -101,6 +101,11 @@ export const MERCHANT_RULES: MerchantRule[] = [
   // Reached via a truncated handle rather than a spelled-out name
   { pattern: /^thekeralastate(f|financial)/, name: 'KSFE' },
 
+  // Listed companies, reached through NACH dividend payouts rather than through
+  // a payment. Anchored to the whole token: a bare /^tcs/ would also claim
+  // unrelated names starting with those letters.
+  { pattern: /^(tcs|tataconsultancy(services)?)$/, name: 'TCS' },
+
   // Investing
   { pattern: /^(zerodha|kite)/, name: 'Zerodha' },
   { pattern: /^(groww|nextbillion)/, name: 'Groww' },
